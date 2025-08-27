@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Login Only</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>input,select{color:#111!important}.mc{background:#0e0e0f;color:#d7ffd7;border-radius:10px;padding:10px;height:50vh;overflow:auto;font-family:ui-monospace,Menlo,Consolas,monospace}</style>
+</head>
+<body class="bg-neutral-100 text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100">
+  <div class="max-w-xl mx-auto p-4 space-y-3">
+    <div class="panel p-2 border bg-white dark:bg-neutral-900 rounded flex flex-col md:flex-row gap-2 items-stretch mb-3"><div class="flex-1 flex items-center gap-2"><span id="lockDotL" class="w-3 h-3 rounded-full bg-red-500"></span><span id="lockTextL" class="text-sm">מצב: נעול – צריך להזין טוקן</span></div><input id="tokenL" class="px-3 py-2 rounded border flex-1" placeholder="ADMIN_TOKEN" /><button id="saveTokenL" class="px-3 py-2 rounded bg-blue-600 text-white">שמירה</button><a href="./" class="px-3 py-2 rounded border">חזרה</a></div><div class="flex items-center justify-between">
+      <h1 class="font-semibold text-lg">התחברות לחשבון (ללא סשן)</h1>
+      <a href="./" class="px-3 py-2 rounded border">חזרה</a>
+    </div>
+    <form id="loginForm" class="grid gap-2 panel p-3 border bg-white dark:bg-neutral-900 rounded">
+      <input id="l_host" class="px-3 py-2 rounded border" placeholder="play.server.com" required />
+      <input id="l_port" type="number" value="25565" class="px-3 py-2 rounded border" />
+      <select id="l_auth" class="px-3 py-2 rounded border"><option value="microsoft">Microsoft (Online)</option><option value="offline">Offline</option></select>
+      <input id="l_username" class="px-3 py-2 rounded border hidden" placeholder="שם משתמש (Offline)"/>
+      <button class="px-4 py-2 rounded bg-blue-600 text-white">בצע התחברות</button>
+    </form>
+    <div id="loginConsole" class="mc">[LOGIN] מוכן.</div>
+  </div>
+  <script type="module">
+    const $=s=>document.querySelector(s); const tokenKey='afk.token'
+    const apiCreate= async cfg => { const headers={'Content-Type':'application/json', ...(localStorage.getItem(tokenKey)?{'Authorization':'Bearer '+localStorage.getItem(tokenKey)}:{})}; const r=await fetch('/api/sessions',{method:'POST',headers, body:JSON.stringify(cfg)}); if(r.status===401) throw new Error('צריך להזין ADMIN_TOKEN (Unauthorized)'); if(!r.ok) throw new Error((await r.json()).error||r.statusText); return r.json() }
+    $('#l_auth').onchange=()=> $('#l_username').classList.toggle('hidden',$('#l_auth').value!=='offline')
+    $('#loginForm').onsubmit=async e=>{
+      e.preventDefault()
+      const cfg={ host:$('#l_host').value.trim(), port:Number($('#l_port').value||25565), auth:$('#l_auth').value, username:$('#l_auth').value==='offline'?$('#l_username').value.trim():undefined, loginOnly:true, autoReconnect:false }
+      const box=$('#loginConsole'); box.textContent+='\n[LOGIN] Connecting…'
+      try{ const {id}=await apiCreate(cfg); box.textContent+='\n[LOGIN] id '+id }catch(e){ box.textContent+='\n[ERROR] '+(e?.message||e) }
+    }
+  </script>
+
+  <div id="msaModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/60">
+    <div class="w-11/12 max-w-md rounded-xl border bg-white dark:bg-neutral-900 p-4 space-y-3">
+      <div class="panel p-2 border bg-white dark:bg-neutral-900 rounded flex flex-col md:flex-row gap-2 items-stretch mb-3"><div class="flex-1 flex items-center gap-2"><span id="lockDotL" class="w-3 h-3 rounded-full bg-red-500"></span><span id="lockTextL" class="text-sm">מצב: נעול – צריך להזין טוקן</span></div><input id="tokenL" class="px-3 py-2 rounded border flex-1" placeholder="ADMIN_TOKEN" /><button id="saveTokenL" class="px-3 py-2 rounded bg-blue-600 text-white">שמירה</button><a href="./" class="px-3 py-2 rounded border">חזרה</a></div><div class="flex items-center justify-between">
+        <h3 class="font-semibold text-lg">Microsoft login</h3>
+        <button id="msaClose" class="px-2 py-1 rounded border">×</button>
+      </div>
+      <div class="text-sm">Step 1: Copy this code</div>
+      <div id="msaCode" class="text-2xl font-mono bg-neutral-100 dark:bg-neutral-800 rounded p-2 text-center select-all">—</div>
+      <button id="msaCopy" class="w-full px-3 py-2 rounded bg-blue-600 text-white">Copy code</button>
+      <div class="text-sm">Step 2: Open Microsoft</div>
+      <a id="msaOpen" class="block text-center px-3 py-2 rounded border hover:bg-neutral-100 dark:hover:bg-neutral-800" target="_blank" rel="noopener">Open microsoft.com/link</a>
+      <div class="text-sm">Step 3: Paste the code and sign in. Step 4: Close this window.</div>
+      <div class="text-xs text-neutral-500">The window will auto-hide after successful login.</div>
+    </div>
+  </div>
+
+  <script type="module">
+    const tokenKey='afk.token'
+    const msaModal=document.getElementById('msaModal'),msaCodeEl=document.getElementById('msaCode'),msaOpen=document.getElementById('msaOpen'),msaCopy=document.getElementById('msaCopy'),msaClose=document.getElementById('msaClose')
+    function parseAuthMsg(msg){ const url=(msg.match(/https?:\/\/\S+/i)||[])[0]||'https://www.microsoft.com/link'; const m=msg.match(/code\s+([A-Z0-9]{4,})/i) || msg.match(/\b([A-Z0-9]{4,})\b/); const code=m&&m[1]?m[1].toUpperCase():''; return {url,code} }
+    function showMsaModal(url,code){ if(msaCodeEl) msaCodeEl.textContent=code||'—'; if(msaOpen){msaOpen.href=url; msaOpen.textContent=url} if(msaModal) msaModal.classList.remove('hidden') }
+    if(msaCopy){ msaCopy.onclick=async()=>{ try{ await navigator.clipboard.writeText(msaCodeEl.textContent.trim()) }catch{} } }
+    if(msaClose){ msaClose.onclick=()=> msaModal.classList.add('hidden') }
+    try{ const proto=location.protocol==='https:'?'wss://':'ws://', tok=localStorage.getItem(tokenKey)||'', ws=new WebSocket(proto+location.host+'/ws'+(tok?('?token='+encodeURIComponent(tok)):'') ); ws.onmessage=e=>{ try{ const d=JSON.parse(e.data); if(d.type==='log' && d.payload.entry.level==='auth'){ const {url,code}=parseAuthMsg(d.payload.entry.msg); showMsaModal(url,code) } }catch{} } }catch{}
+  </script>
+</body>
+</html>
