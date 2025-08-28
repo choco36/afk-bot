@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AFK Console PRO</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    input,select,textarea{ color:#111 !important }
+    .panel{ border-radius:14px }
+    .mcbox{ background:#0e0e0f; color:#d7ffd7; font-family:ui-monospace,Menlo,Consolas,monospace; border-radius:10px; padding:10px; }
+    .msg-user{ color:#8ab4ff } .msg-sys{ color:#7dd3fc } .msg-you{ color:#ffd27d }
+  </style>
+</head>
+<body class="bg-neutral-100 text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100">
+  <div class="max-w-6xl mx-auto p-3 space-y-3">
+
+    <!-- Top bar -->
+    <div class="panel p-3 border bg-white dark:bg-neutral-900 flex flex-col md:flex-row gap-2 items-stretch">
+      <div class="flex-1 flex items-center gap-2">
+        <span class="w-3 h-3 rounded-full bg-green-500"></span>
+        <span class="text-sm">מצב: פתוח • ללא טוקן</span>
+      </div>
+      <button id="btnMsLogin" class="px-4 py-2 rounded bg-emerald-600 text-white">התחבר למיקרוסופט</button>
+      <button id="stopAll" class="px-4 py-2 rounded bg-red-600 text-white">עצור הכל</button>
+    </div>
+
+    <!-- Auth banner -->
+    <div id="authBanner" class="max-w-6xl mx-auto hidden"><div class="m-2 p-3 rounded bg-amber-100 text-amber-900 border border-amber-300 text-sm">להתחברות מיקרוסופט: יופיע כאן קישור וקוד.</div></div>
+
+    <!-- 3 columns -->
+    <div class="grid md:grid-cols-3 gap-3">
+      <!-- Accounts -->
+      <div class="panel p-3 border bg-white dark:bg-neutral-900">
+        <h2 class="font-semibold mb-2">Accounts</h2>
+        <div id="sessions" class="space-y-2 max-h-[60vh] overflow-auto"></div>
+        <div class="flex gap-2 mt-2"><button id="refreshSessions" class="px-3 py-2 rounded border flex-1">רענן</button></div>
+      </div>
+
+      <!-- Settings -->
+      <div class="panel p-3 border bg-white dark:bg-neutral-900">
+        <h2 class="font-semibold mb-2">Settings</h2>
+        <form id="sessionForm" class="grid gap-2">
+          <select id="preset" class="px-3 py-2 rounded border">
+            <option value="donutsmp.net:25565">donutsmp.net</option>
+            <option value="hypixel.net:25565">hypixel.net</option>
+            <option value="custom">Custom…</option>
+          </select>
+          <input id="host" class="px-3 py-2 rounded border" placeholder="play.server.com" required />
+          <input id="port" type="number" value="25565" class="px-3 py-2 rounded border" />
+          <select id="auth" class="px-3 py-2 rounded border"><option value="microsoft">Microsoft (Online)</option><option value="offline">Offline</option></select>
+          <input id="username" class="px-3 py-2 rounded border hidden" placeholder="שם משתמש (Offline)" />
+          <input id="joinCmd" class="px-3 py-2 rounded border" placeholder="/server survival" />
+          <input id="keepAliveCmd" class="px-3 py-2 rounded border" placeholder="/ping" />
+          <div class="grid grid-cols-2 gap-2">
+            <select id="afkMode" class="px-3 py-2 rounded border"><option value="jitter">Jitter</option><option value="circle">Circle</option><option value="strafe">Strafe</option><option value="walkabout">Walkabout</option></select>
+            <input id="afkIntervalMs" type="number" value="60000" class="px-3 py-2 rounded border" />
+          </div>
+          <div class="grid grid-cols-2 gap-2">
+            <label class="flex items-center gap-2"><input id="autoReconnect" type="checkbox" checked /> Auto Reconnect</label>
+            <input id="reconnectDelayMs" type="number" value="10000" class="px-3 py-2 rounded border" />
+          </div>
+          <button class="px-4 py-2 rounded bg-blue-600 text-white">התחל סשן</button>
+        </form>
+        <p class="text-xs text-neutral-500 mt-1">* אם התחברת קודם בלחיצה “התחבר למיקרוסופט”, הסשן ישתמש באותם טוקנים בלי לבקש קוד שוב.</p>
+      </div>
+
+      <!-- Console -->
+      <div class="panel p-3 border bg-white dark:bg-neutral-900">
+        <div class="flex items-center justify-between mb-2"><h2 class="font-semibold">Console</h2><select id="chatSession" class="px-3 py-2 rounded border"></select></div>
+        <div id="chatBox" class="mcbox max-h-[50vh] overflow-auto"></div>
+        <div class="flex gap-2 mt-2"><input id="chatInput" class="px-3 py-2 rounded border flex-1" placeholder="כתוב הודעה…" /><button id="chatSend" class="px-4 py-2 rounded bg-blue-600 text-white">Send</button></div>
+      </div>
+    </div>
+
+    <!-- Microsoft 2FA-style Modal -->
+    <div id="msaModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70">
+      <div class="w-11/12 max-w-xl rounded-xl border bg-neutral-900 text-white p-6 space-y-4 shadow-2xl">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-3"><div class="text-2xl">🔒</div><h3 class="font-bold text-2xl">2FA code</h3></div>
+          <button id="msaClose" class="px-3 py-1 rounded bg-neutral-800 border border-neutral-700">✕</button>
+        </div>
+        <div>
+          <div class="text-lg font-semibold">Step 1:</div>
+          <div class="text-neutral-300 mb-2">Copy this code:</div>
+          <div id="msaCode" class="text-3xl font-mono bg-neutral-800 rounded p-3 text-center select-all tracking-widest">—</div>
+          <div class="flex gap-2 mt-2">
+            <button id="msaCopy" class="px-3 py-2 rounded bg-blue-600 text-white flex-1">Copy code</button>
+            <a id="msaOpen" target="_blank" rel="noopener" class="px-3 py-2 rounded bg-neutral-800 border border-neutral-700 flex-1 text-center">Open microsoft.com/link</a>
+          </div>
+        </div>
+        <div><div class="text-lg font-semibold">Step 2:</div><div class="text-neutral-300">Paste the code into the Microsoft authentication window which we've opened for you.</div></div>
+        <div><div class="text-lg font-semibold">Step 3:</div><div class="text-neutral-300">Log into your account.</div></div>
+        <div><div class="text-lg font-semibold">Step 4:</div><div class="text-neutral-300">Once logged in, close this window and you're done!</div></div>
+      </div>
+    </div>
+
+  </div>
+  <script src="./app.js" type="module"></script>
+</body>
+</html>
