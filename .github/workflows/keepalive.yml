@@ -2,8 +2,9 @@ name: Keep Koyeb Awake
 
 on:
   schedule:
-    - cron: "*/2 * * * *"   # רץ כל 2 דקות
-  workflow_dispatch: {}      # אפשר להריץ ידנית
+    - cron: "*/5 * * * *"      # דקה 0,5,10...
+    - cron: "2-59/5 * * * *"   # דקה 2,7,12... (היסט 2 דקות)
+  workflow_dispatch: {}        # אפשר להריץ ידנית
 
 concurrency:
   group: keepalive
@@ -15,7 +16,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Random jitter
-        run: sleep $((RANDOM % 20))  # מפזר עומסים בין הדקות
+        run: sleep $((RANDOM % 20))  # מפזר עומסים בין הרצים
 
       - name: Ping /healthz
         env:
@@ -34,5 +35,5 @@ jobs:
             fi
             sleep $((5 * i))
           done
-          echo "⚠️ לא הצליח — משאיר סטאטוס ירוק כדי שלא יסמן כשל בעמוד ה-Actions"
+          echo "⚠️ לא הצליח — משאיר סטטוס ירוק כדי לא לסמן כשל ב-Actions"
           exit 0
