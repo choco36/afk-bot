@@ -1,3 +1,4 @@
+// === src/index.js ===
 const http = require('http');
 const path = require('path');
 const express = require('express');
@@ -41,7 +42,19 @@ class BotWrapper {
     this.reconnectTimer = null;
     this.loginTimer = null;
     this.antiAfkTimer = null;
-    this.manual = false;
+    this.manual = false; // set true כשהפסקה ידנית / על שגיאת DNS
+  }
+
+  snapshot() {
+    return {
+      id: this.id,
+      server: this.options.server,
+      version: this.options.version || 'auto',
+      mode: this.options.mode || 'microsoft',
+      flags: this.options.flags || {},
+      connected: !!this.bot,
+      manual: !!this.manual
+    };
   }
 
   log(level, msg, data = {}) {
@@ -55,6 +68,7 @@ class BotWrapper {
 
     if (!host || host === 'play.server.com') {
       this.log('error', 'Invalid server host. Set a real Server IP.');
+      this.broadcast({ type: 'state', items: [ this.snapshot() ] });
       return;
     }
 
@@ -84,16 +98,19 @@ class BotWrapper {
         this.bot = mineflayer.createBot(opts);
       } catch (e) {
         this.log('error', 'Failed to create bot: ' + e.message);
+        this.broadcast({ type: 'state', items: [ this.snapshot() ] });
         return;
       }
 
       this.bot.once('login', () => this.log('info', 'Logging in...'));
+
       this.bot.once('spawn', () => {
         this.log('success', 'Spawned in world');
         if (flags?.sneak) this.bot.setControlState('sneak', true);
         if (loginMessage) this.bot.chat(loginMessage);
         if (worldChangeMessage) setTimeout(() => this.bot && this.bot.chat(worldChangeMessage), 1200);
         if (flags?.antiAfk) this.startAntiAfk();
+        this.broadcast({ type: 'state', items: [ this.snapshot() ] });
       });
 
       this.bot.on('message', (jsonMsg) => {
@@ -108,6 +125,7 @@ class BotWrapper {
         this.log('warn', 'Disconnected', { reason });
         this.stopAntiAfk();
         this.bot = null;
+        this.broadcast({ type: 'state', items: [ this.snapshot() ] });
         const wantAuto = !!(this.options.flags?.autoReconnect);
         if (wantAuto && !this.manual) this.scheduleReconnect();
       });
@@ -122,6 +140,9 @@ class BotWrapper {
           this.disconnect();
         }
       });
+
+      // שדר מצב גם מיד אחרי create (מחובר/לא)
+      this.broadcast({ type: 'state', items: [ this.snapshot() ] });
     };
 
     const schedule = () => {
@@ -135,16 +156,17 @@ class BotWrapper {
       }
     };
 
+    // DNS pre-check
     dns.lookup(host).then(() => schedule()).catch((err) => {
       this.log('error', `DNS lookup failed for ${host}: ${err && err.message ? err.message : err}`);
-      this.manual = true;
+      this.manual = true; // בלום לופ ריקונקט
+      this.broadcast({ type: 'state', items: [ this.snapshot() ] });
     });
   }
 
   startAntiAfk() {
     this.stopAntiAfk();
-    const bot = this.bot;
-    if (!bot) return;
+    if (!this.bot) return;
     let step = 0;
     this.antiAfkTimer = setInterval(() => {
       if (!this.bot) return;
@@ -200,6 +222,7 @@ class BotWrapper {
       try { this.bot.end('manual'); } catch {}
       this.bot = null;
     }
+    this.broadcast({ type: 'state', items: [ this.snapshot() ] });
   }
 }
 
@@ -211,14 +234,24 @@ class BotManager {
   spawnBot(spawnOptions) {
     if (this.bots.size >= MAX_BOTS) return { error: 'MAX_BOTS_LIMIT' };
     const id = spawnOptions.accountId || uuidv4();
-    const wrapper = new BotWrapper(id, spawnOptions, this.broadcast);
-    this.bots.set(id, wrapper);
+    let wrapper = this.bots.get(id);
+    if (!wrapper) {
+      wrapper = new BotWrapper(id, spawnOptions, this.broadcast);
+      this.bots.set(id, wrapper);
+    }
+    wrapper.options = spawnOptions; // עדכון הגדרות אם קיימות
     wrapper.spawn();
-    return { accountId: id };
+    return { accountId: id, snapshot: wrapper.snapshot() };
   }
   byId(id) { return this.bots.get(id); }
-  remove(id) { const w = this.bots.get(id); if (!w) return; w.disconnect(); this.bots.delete(id); }
-  list() { return Array.from(this.bots.keys()); }
+  remove(id) {
+    const w = this.bots.get(id);
+    if (!w) return;
+    w.disconnect();
+    this.bots.delete(id);
+    this.broadcast({ type:'state', items:[{ id, connected:false, removed:true }]});
+  }
+  list() { return Array.from(this.bots.values()).map(b => b.snapshot()); }
 }
 
 const manager = new BotManager((msg) => {
@@ -230,8 +263,10 @@ const manager = new BotManager((msg) => {
 });
 
 wss.on('connection', (ws) => {
-  ws.subs = new Set();
+  ws.subs = new Set(['ALL']); // ברירת מחדל: לקבל הכל
   safeSend(ws, { type: 'hello', msg: 'connected', maxBots: MAX_BOTS });
+  // שלח צילום מצב מלא מיד על התחברות
+  safeSend(ws, { type: 'state', items: manager.list() });
 
   ws.on('message', (raw) => {
     let msg; try { msg = JSON.parse(raw.toString()); } catch { return; }
@@ -241,14 +276,14 @@ wss.on('connection', (ws) => {
       ws.subs.clear();
       if (msg.all) { ws.subs.add('ALL'); }
       else if (Array.isArray(msg.accounts)) { msg.accounts.forEach((id) => ws.subs.add(String(id))); }
-      safeSend(ws, { type: 'subscribed', accounts: Array.from(ws.subs) });
+      return safeSend(ws, { type: 'subscribed', accounts: Array.from(ws.subs) });
     }
 
     if (t === 'spawn') {
       const res = manager.spawnBot({
         accountId: msg.accountId,
         mode: msg.mode || 'microsoft',
-        username: msg.username || null,
+        username: msg.username || null,     // בשימוש רק ב-offline
         server: msg.server,
         version: msg.version || 'auto',
         loginDelay: Number(msg.loginDelay || 0),
@@ -261,7 +296,11 @@ wss.on('connection', (ws) => {
         }
       });
       if (res.error) safeSend(ws, { type:'error', error: res.error });
-      else { safeSend(ws, { type:'spawned', accountId: res.accountId }); try { ws.subs.add(res.accountId); } catch {} }
+      else {
+        safeSend(ws, { type:'spawned', accountId: res.accountId });
+        safeSend(ws, { type:'state', items:[ res.snapshot ] });
+        try { ws.subs.add(res.accountId); } catch {}
+      }
     }
 
     if (t === 'chat') { const w = manager.byId(msg.accountId); if (w && msg.text) w.say(msg.text); }
@@ -269,7 +308,7 @@ wss.on('connection', (ws) => {
     if (t === 'toggleSneak') { const w = manager.byId(msg.accountId); if (w) w.setSneak(!!msg.enabled); }
     if (t === 'disconnect') { const w = manager.byId(msg.accountId); if (w) { w.disconnect(); safeSend(ws, { type:'disconnected', accountId: msg.accountId }); } }
     if (t === 'remove') { manager.remove(msg.accountId); safeSend(ws, { type:'removed', accountId: msg.accountId }); }
-    if (t === 'list') { safeSend(ws, { type: 'list', items: manager.list() }); }
+    if (t === 'list') { safeSend(ws, { type: 'state', items: manager.list() }); }
   });
 });
 
