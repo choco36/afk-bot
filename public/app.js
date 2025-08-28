@@ -1,0 +1,85 @@
+const $=s=>document.querySelector(s), tokenKey='afk.token'
+function setLockUI(locked){ $('#lockDot').className='w-3 h-3 rounded-full '+(locked?'bg-red-500':'bg-green-500'); $('#lockText').textContent=locked?'מצב: נעול – צריך להזין טוקן':'מצב: פתוח – הטוקן נשמר' }
+function authHeaders(){ const t=localStorage.getItem(tokenKey); return t?{'Authorization':'Bearer '+t}:{} }
+async function checkLock(){ try{ const r=await fetch('/api/me'); const {tokenRequired}=await r.json(); setLockUI(!!tokenRequired && !localStorage.getItem(tokenKey)) }catch{} }
+checkLock()
+
+function withTokenUrl(path){ const t=localStorage.getItem(tokenKey); if(!t) return path; const sep=path.includes('?')?'&':'?'; return path+sep+'token='+encodeURIComponent(t) }
+async function setServerCookieFromToken(){ const t=localStorage.getItem(tokenKey); if(!t) return; try{ await fetch('/api/set-token',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:t})}) }catch{} }
+
+document.getElementById('saveToken').onclick=()=>{ localStorage.setItem(tokenKey, document.getElementById('token').value.trim()); setServerCookieFromToken(); alert('נשמר'); checkLock() }
+
+// API
+const api = {
+  async list(){ const r=await fetch(withTokenUrl('/api/sessions'),{headers:authHeaders()}); if(!r.ok) throw new Error((await r.json()).error||r.statusText); return r.json() },
+  async create(cfg){ const r=await fetch(withTokenUrl('/api/sessions'),{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify(cfg)}); if(!r.ok) throw new Error((await r.json()).error||r.statusText); return r.json() },
+  async stop(id){ const r=await fetch(withTokenUrl('/api/sessions/'+id+'/stop'),{method:'POST',headers:authHeaders()}); if(!r.ok) throw new Error((await r.json()).error||r.statusText); return r.json() },
+  async chat(id,text){ const r=await fetch(withTokenUrl('/api/sessions/'+id+'/chat'),{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({text})}); if(!r.ok) throw new Error((await r.json()).error||r.statusText); return r.json() },
+}
+
+// Sessions list
+const sessionsBox=$('#sessions'), chatSel=$('#chatSession')
+function renderSessions(list){
+  sessionsBox.innerHTML=''
+  if(!list.length){ sessionsBox.innerHTML='<div class="text-sm text-neutral-500">אין סשנים</div>'; chatSel.innerHTML='<option value=\"\">בחר סשן…</option>'; return }
+  list.forEach(s=>{
+    const div=document.createElement('div')
+    div.className='p-2 border rounded flex items-center justify-between gap-2'
+    div.innerHTML=`<div class="min-w-0"><div class="font-medium truncate">${s.username||'(auth…)'} @ ${s.host}:${s.port}</div><div class="text-xs text-neutral-500">מצב: ${s.status} • ${s.auth}</div></div><div class="flex gap-2"><button class="btn-stop px-2 py-1 rounded bg-red-600 text-white">עצור</button></div>`
+    sessionsBox.appendChild(div)
+    div.querySelector('.btn-stop').onclick=async()=>{ if(!confirm('לעצור?')) return; await api.stop(s.id); await refreshSessions() }
+  })
+  const old=chatSel.value
+  chatSel.innerHTML='<option value=\"\">בחר סשן…</option>'+list.map(s=>`<option value="${s.id}">${s.username||'(auth…)'} @ ${s.host}</option>`).join('')
+  if(list.some(s=>s.id===old)) chatSel.value=old
+}
+async function refreshSessions(){ try{ renderSessions(await api.list()) }catch(e){ sessionsBox.innerHTML='<div class="text-sm text-red-600">שגיאת הרשאה</div>' } }
+document.getElementById('refreshSessions').onclick=refreshSessions
+
+// Settings + Presets
+const presetEl = document.getElementById('preset')
+const hostEl = document.getElementById('host')
+const portEl = document.getElementById('port')
+if(presetEl){
+  const applyPreset = (v)=>{
+    if(v==='custom'){ hostEl.disabled=false; portEl.disabled=false; return }
+    const [h,p] = v.split(':'); hostEl.value=h; portEl.value=Number(p||25565); hostEl.disabled=true; portEl.disabled=true
+    localStorage.setItem('afk.preset', v)
+  }
+  presetEl.onchange = ()=> applyPreset(presetEl.value)
+  const savedPreset = localStorage.getItem('afk.preset') || 'donutsmp.net:25565'
+  presetEl.value = savedPreset
+  applyPreset(savedPreset)
+}
+document.getElementById('auth').onchange=()=> document.getElementById('username').classList.toggle('hidden', document.getElementById('auth').value!=='offline')
+document.getElementById('sessionForm').onsubmit=async e=>{
+  e.preventDefault()
+  const cfg={ host:hostEl.value.trim(), port:Number(portEl.value||25565), auth:document.getElementById('auth').value, username:document.getElementById('auth').value==='offline'?document.getElementById('username').value.trim():undefined, joinCmd:document.getElementById('joinCmd').value.trim(), keepAliveCmd:document.getElementById('keepAliveCmd').value.trim(), afkMode:document.getElementById('afkMode').value, afkIntervalMs:Number(document.getElementById('afkIntervalMs').value||60000), autoReconnect:document.getElementById('autoReconnect').checked, reconnectDelayMs:Number(document.getElementById('reconnectDelayMs').value||10000) }
+  try{ await api.create(cfg); await refreshSessions() }catch(e2){ alert('שגיאה: '+(e2?.message||e2)) }
+}
+
+// Quick login (one click)
+document.getElementById('quickLogin').onclick=async()=>{
+  const cfg={ host:hostEl.value.trim(), port:Number(portEl.value||25565), auth:document.getElementById('auth').value, username:document.getElementById('auth').value==='offline'?document.getElementById('username').value.trim():undefined, loginOnly:true, autoReconnect:false }
+  try{ await api.create(cfg); await refreshSessions() }catch(e){ alert('שגיאה: '+(e?.message||e)) }
+}
+
+// Chat
+const chatBox=$('#chatBox'); let chatLines=[]
+function appendChat(line){ chatLines.push(line); if(chatLines.length>500) chatLines.splice(0,chatLines.length-500); chatBox.innerHTML=chatLines.map(renderLine).join(''); chatBox.scrollTop=chatBox.scrollHeight }
+function renderLine(l){ const t=new Date(l.ts).toLocaleTimeString(); let user='System', msg=l.msg, cls='msg-sys'; const m1=l.msg.match(/^<(.+?)>\\s*(.*)$/); const m2=l.msg.match(/^(\\w+):\\s*(.*)$/); if(l.level==='you'){ user='You'; msg=l.msg; cls='msg-you' } else if(m1){ user=m1[1]; msg=m1[2]; cls='msg-user' } else if(m2){ user=m2[1]; msg=m2[2]; cls='msg-user' } return `<div><span class="text-neutral-500">[${t}]</span> <span class="${cls}">&lt;${escapeHtml(user)}&gt;</span> <span>${escapeHtml(msg)}</span></div>` }
+function escapeHtml(s){ return s.replace(/[&<>"']/g, m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',\"'\":'&#39;' }[m])) }
+document.getElementById('chatSend').onclick=async()=>{ const id=chatSel.value, text=document.getElementById('chatInput').value.trim(); if(!id) return alert('בחר סשן'); if(!text) return; try{ await api.chat(id,text); document.getElementById('chatInput').value='' }catch(e){ alert('שגיאה: '+(e?.message||e)) }}
+
+// WS + Microsoft modal
+const authBanner=document.getElementById('authBanner')
+function showAuthBanner(text){ if(!authBanner) return; authBanner.innerHTML=`<div class="m-2 p-3 rounded bg-amber-100 text-amber-900 border border-amber-300 text-sm">${text}</div>`; authBanner.classList.remove('hidden') }
+const msaModal=document.getElementById('msaModal'), msaCodeEl=document.getElementById('msaCode'), msaOpen=document.getElementById('msaOpen'), msaCopy=document.getElementById('msaCopy'), msaClose=document.getElementById('msaClose')
+function parseAuthMsg(msg){ const url=(msg.match(/https?:\\/\\/\\S+/i)||[])[0]||'https://www.microsoft.com/link'; const m=msg.match(/code\\s+([A-Z0-9]{4,})/i) || msg.match(/\\b([A-Z0-9]{4,})\\b/); const code=m&&m[1]?m[1].toUpperCase():''; return {url,code} }
+function showMsaModal(url,code){ if(msaCodeEl) msaCodeEl.textContent=code||'—'; if(msaOpen){ msaOpen.href=url; msaOpen.textContent=url } if(msaModal) msaModal.classList.remove('hidden') }
+if(msaCopy){ msaCopy.onclick=async()=>{ try{ await navigator.clipboard.writeText(msaCodeEl.textContent.trim()) }catch{} } }
+if(msaClose){ msaClose.onclick=()=> msaModal.classList.add('hidden') }
+
+try{ const proto=location.protocol==='https:'?'wss://':'ws://', tok=localStorage.getItem(tokenKey)||''; const ws=new WebSocket(proto+location.host+'/ws'+(tok?('?token='+encodeURIComponent(tok)):'') ); ws.onmessage=(ev)=>{ try{ const {type,payload}=JSON.parse(ev.data); if(type==='sessions'){ renderSessions(payload) } else if(type==='log'){ if(payload.entry.level==='auth'){ const {url,code}=parseAuthMsg(payload.entry.msg); showAuthBanner(payload.entry.msg); showMsaModal(url,code); try{ window.open(url,'_blank','noopener') }catch{} } if(['chat','you','ok','warn','error','trace'].includes(payload.entry.level)){ appendChat({ts:payload.entry.ts, level:payload.entry.level, msg:String(payload.entry.msg)}) } } }catch{} } }catch{}
+
+refreshSessions()
