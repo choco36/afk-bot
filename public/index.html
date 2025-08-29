@@ -5,6 +5,74 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>AFK Console Client</title>
   <link rel="stylesheet" href="styles.css" />
+
+  <!-- Responsive-only tweaks (sizes & layout) -->
+  <style>
+    /* מסכים עד 1024px: הופך לשלושה פאנלים אחד מתחת לשני + שדות ברוחב מלא */
+    @media (max-width: 1024px) {
+      .banner h1 { font-size: 1.1rem; text-align: center; }
+
+      /* ודא שיש גריד; במובייל – עמודה אחת */
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 12px;
+        padding: 0 8px;
+      }
+
+      .panel {
+        width: 100%;
+        padding: 12px;
+        border-radius: 12px;
+      }
+
+      /* כל השורות הפנימיות בעמודה אחת */
+      .row, .form, .toggles { 
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 8px;
+      }
+
+      /* קלטים/סלקטים/כפתורים ברוחב מלא */
+      .panel input[type="text"],
+      .panel input[type="number"],
+      .panel input[type="email"],
+      .panel input[type="password"],
+      .panel select,
+      .panel textarea,
+      .panel button {
+        width: 100%;
+        max-width: 100%;
+      }
+
+      /* אזור shards קומפקטי בשורה אחת */
+      .shards {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        align-items: center;
+        gap: 8px;
+      }
+      .shards img { width: 28px; height: 28px; }
+      .shards-info { display: flex; align-items: baseline; gap: 8px; }
+      .shards-ctrl { margin-top: 8px; display: grid; grid-template-columns: 1fr; gap: 6px; }
+
+      /* הקונסולה – גובה נוח, גלילה פנימית */
+      #console {
+        height: 52vh;
+        overflow-y: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-size: 12px;
+        line-height: 1.25;
+      }
+    }
+
+    /* מסכים מאוד צרים */
+    @media (max-width: 480px) {
+      .banner h1 { font-size: 1rem; }
+      #console    { height: 56vh; font-size: 11px; }
+    }
+  </style>
 </head>
 <body>
   <header class="banner">
@@ -25,7 +93,7 @@
       </div>
       <ul id="accounts" class="list"></ul>
 
-      <div class="footer-actions">
+      <div class="footer-actions row">
         <button id="btnConnectAll" class="primary">Connect</button>
         <button id="btnDisconnectAll">Disconnect</button>
         <span id="onlineCount">Online: 0</span>
