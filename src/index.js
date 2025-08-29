@@ -43,7 +43,7 @@ class BotWrapper {
     this.reconnectTimer = null;
     this.loginTimer = null;
     this.antiAfkTimer = null;
-    this.manual = false; // נהיה true כשמנתקים ידנית או על בעיית DNS
+    this.manual = false; // true כשמופסק ידנית/שגיאת DNS
   }
 
   snapshot() {
@@ -79,8 +79,8 @@ class BotWrapper {
         port,
         version: version && version !== 'auto' ? version : undefined,
         auth: mode === 'offline' ? 'offline' : 'microsoft',
-        flow: mode === 'offline' ? undefined : 'live',   // 👈 חשוב ל-Microsoft
-        authTitle: 'afk-console-client',                 // 👈 שומר טוקנים בקאש
+        flow: mode === 'offline' ? undefined : 'live', // חשוב לגרסאות prismarine-auth החדשות
+        authTitle: 'afk-console-client',               // שמירת טוקנים לקאש
         onMsaCode: (data) => {
           this.broadcast({
             type: 'deviceCode',
@@ -116,10 +116,177 @@ class BotWrapper {
         this.broadcast({ type: 'state', items: [ this.snapshot() ] });
       });
 
+      // ---- הבעיה הייתה כאן: הציטוט נשבר. כתבתי זאת כבלוק מסודר.
+      this.bot.on('kicked', (reason) => {
+        this.log('warn', 'Kicked', { reason });
+      });
+
       this.bot.on('message', (jsonMsg) => {
         let text = '';
         try { text = jsonMsg.toString(); } catch { text = String(jsonMsg); }
         this.broadcast({ type: 'chat', accountId: this.id, text });
       });
 
-      this.bot.on('kicked', (reason) => this.log('warn', 'Kicked
+      this.bot.on('end', (reason) => {
+        this.log('warn', 'Disconnected', { reason });
+        this.stopAntiAfk();
+        this.bot = null;
+        this.broadcast({ type: 'state', items: [ this.snapshot() ] });
+        const wantAuto = !!(this.options.flags?.autoReconnect);
+        if (wantAuto && !this.manual) this.scheduleReconnect();
+      });
+
+      this.bot.on('error', (err) => {
+        const msg = String(err?.message || err || 'error');
+        const code = err?.code || '';
+        this.log('error', 'Bot error: ' + msg);
+        if (code === 'ENOTFOUND' || code === 'EAI_AGAIN' || /getaddrinfo ENOTFOUND/i.test(msg)) {
+          this.log('warn', 'DNS error detected — stopping auto-reconnect for this account.');
+          this.manual = true;
+          this.disconnect();
+        }
+      });
+
+      // מצב ראשוני
+      this.broadcast({ type: 'state', items: [ this.snapshot() ] });
+    };
+
+    const schedule = () => {
+      const delay = Math.max(0, Number(loginDelay || 0));
+      if (delay) {
+        this.log('info', `Delaying login by ${delay}ms`);
+        if (this.loginTimer) clearTimeout(this.loginTimer);
+        this.loginTimer = setTimeout(() => { this.loginTimer = null; create(); }, delay);
+      } else {
+        create();
+      }
+    };
+
+    // DNS pre-check
+    dns.lookup(host).then(() => schedule()).catch((err) => {
+      this.log('error', `DNS lookup failed for ${host}: ${err && err.message ? err.message : err}`);
+      this.manual = true; // בלימה של ריקונקט עד שמשנים שרת
+      this.broadcast({ type: 'state', items: [ this.snapshot() ] });
+    });
+  }
+
+  startAntiAfk() {
+    this.stopAntiAfk();
+    if (!this.bot) return;
+    let step = 0;
+    this.antiAfkTimer = setInterval(() => {
+      if (!this.bot) return;
+      step++;
+      const yaw = (step % 360) * (Math.PI / 180);
+      try {
+        this.bot.look(yaw, 0, true);
+        if (step % 10 === 0) {
+          this.bot.setControlState('jump', true);
+          setTimeout(() => this.bot && this.bot.setControlState('jump', false), 200);
+        }
+      } catch {}
+    }, 1000);
+  }
+
+  stopAntiAfk() {
+    if (this.antiAfkTimer) clearInterval(this.antiAfkTimer);
+    this.antiAfkTimer = null;
+  }
+
+  scheduleReconnect() {
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    const backoff = Math.floor(3000 + Math.random() * 4000);
+    this.log('info', `Reconnecting in ${backoff}ms`);
+    if (this.manual) return;
+    this.reconnectTimer = setTimeout(() => { if (!this.manual) this.spawn(); }, backoff);
+  }
+
+  say(text) { if (this.bot) try { this.bot.chat(text); } catch {} }
+
+  dropAll() {
+    const bot = this.bot; if (!bot) return;
+    const items = bot.inventory?.items() || [];
+    const tossNext = () => {
+      if (!items.length) return;
+      const it = items.shift();
+      bot.tossStack(it).then(tossNext).catch(() => tossNext());
+    }; tossNext();
+  }
+
+  setSneak(enabled) { if (this.bot) this.bot.setControlState('sneak', !!enabled); }
+
+  disconnect() {
+    this.manual = true;
+    this.stopAntiAfk();
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer); this.reconnectTimer = null;
+    if (this.loginTimer) clearTimeout(this.loginTimer); this.loginTimer = null;
+    if (this.bot) { try { this.bot.end('manual'); } catch {} this.bot = null; }
+    this.broadcast({ type: 'state', items: [ this.snapshot() ] });
+  }
+}
+
+class BotManager {
+  constructor(broadcast) { this.broadcast = broadcast; this.bots = new Map(); }
+  spawnBot(spawnOptions) {
+    if (this.bots.size >= MAX_BOTS) return { error: 'MAX_BOTS_LIMIT' };
+    const id = spawnOptions.accountId || uuidv4();
+    let wrapper = this.bots.get(id);
+    if (!wrapper) { wrapper = new BotWrapper(id, spawnOptions, this.broadcast); this.bots.set(id, wrapper); }
+    wrapper.options = spawnOptions; // עדכון הגדרות אם קיימות
+    wrapper.spawn();
+    return { accountId: id, snapshot: wrapper.snapshot() };
+  }
+  byId(id) { return this.bots.get(id); }
+  remove(id) { const w = this.bots.get(id); if (w) { w.disconnect(); this.bots.delete(id); this.broadcast({ type:'state', items:[{ id, connected:false, removed:true }]}); } }
+  list() { return Array.from(this.bots.values()).map(b => b.snapshot()); }
+}
+
+const manager = new BotManager((msg) => {
+  wss.clients.forEach((ws) => {
+    if (ws.readyState !== ws.OPEN) return;
+    safeSend(ws, msg); // ברירת מחדל – כולם מקבלים עדכונים
+  });
+});
+
+wss.on('connection', (ws) => {
+  safeSend(ws, { type: 'hello', msg: 'connected', maxBots: MAX_BOTS });
+  // שלח מצב מלא מיד בכניסה
+  safeSend(ws, { type: 'state', items: manager.list() });
+
+  ws.on('message', (raw) => {
+    let msg; try { msg = JSON.parse(raw.toString()); } catch { return; }
+    const t = msg.type;
+
+    if (t === 'spawn') {
+      const res = manager.spawnBot({
+        accountId: msg.accountId,
+        mode: msg.mode || 'microsoft',
+        username: msg.username || null,     // בשימוש רק ב-offline
+        server: msg.server,
+        version: msg.version || 'auto',
+        loginDelay: Number(msg.loginDelay || 0),
+        loginMessage: msg.loginMessage || '',
+        worldChangeMessage: msg.worldChangeMessage || '',
+        flags: {
+          autoReconnect: !!(msg.flags && msg.flags.autoReconnect),
+          antiAfk: !!(msg.flags && msg.flags.antiAfk),
+          sneak: !!(msg.flags && msg.flags.sneak)
+        }
+      });
+      if (res.error) safeSend(ws, { type:'error', error: res.error });
+      else {
+        safeSend(ws, { type:'spawned', accountId: res.accountId });
+        safeSend(ws, { type:'state', items:[ res.snapshot ] });
+      }
+    }
+
+    if (t === 'chat') { const w = manager.byId(msg.accountId); if (w && msg.text) w.say(msg.text); }
+    if (t === 'dropAll') { const w = manager.byId(msg.accountId); if (w) w.dropAll(); }
+    if (t === 'toggleSneak') { const w = manager.byId(msg.accountId); if (w) w.setSneak(!!msg.enabled); }
+    if (t === 'disconnect') { const w = manager.byId(msg.accountId); if (w) { w.disconnect(); safeSend(ws, { type:'disconnected', accountId: msg.accountId }); } }
+    if (t === 'remove') { manager.remove(msg.accountId); safeSend(ws, { type:'removed', accountId: msg.accountId }); }
+    if (t === 'list') { safeSend(ws, { type: 'state', items: manager.list() }); }
+  });
+});
+
+server.listen(PORT, () => console.log('Server listening on :' + PORT));
