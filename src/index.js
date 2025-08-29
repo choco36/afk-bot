@@ -74,13 +74,13 @@ class BotWrapper {
     }
 
     const create = () => {
+      // ⚠️ חשוב: בלי authTitle עבור flow 'live' – אחרת device code נכשל
       const opts = {
         host,
         port,
         version: version && version !== 'auto' ? version : undefined,
         auth: mode === 'offline' ? 'offline' : 'microsoft',
-        flow: mode === 'offline' ? undefined : 'live', // חשוב לגרסאות prismarine-auth החדשות
-        authTitle: 'afk-console-client',               // שמירת טוקנים לקאש
+        flow: mode === 'offline' ? undefined : 'live',
         onMsaCode: (data) => {
           this.broadcast({
             type: 'deviceCode',
@@ -116,7 +116,6 @@ class BotWrapper {
         this.broadcast({ type: 'state', items: [ this.snapshot() ] });
       });
 
-      // ---- הבעיה הייתה כאן: הציטוט נשבר. כתבתי זאת כבלוק מסודר.
       this.bot.on('kicked', (reason) => {
         this.log('warn', 'Kicked', { reason });
       });
